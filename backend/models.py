@@ -1,12 +1,25 @@
 import enum
-import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+from typing import Annotated, Any, Optional
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from bson import ObjectId
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
-from database import Base
+
+def _validate_object_id(value: Any) -> str:
+    if isinstance(value, ObjectId):
+        return str(value)
+    if isinstance(value, str) and ObjectId.is_valid(value):
+        return value
+    raise ValueError("Invalid ObjectId")
+
+
+# Lets Mongo's ObjectId flow in/out of Pydantic models as a plain string.
+PyObjectId = Annotated[str, BeforeValidator(_validate_object_id)]
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class UserRole(str, enum.Enum):
@@ -16,75 +29,95 @@ class UserRole(str, enum.Enum):
     lab_technician = "lab_technician"
 
 
-class User(Base):
-    __tablename__ = "users"
+class User(BaseModel):
+    """Document shape for the `users` collection."""
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    full_name: Mapped[str] = mapped_column(String(150), nullable=False)
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    role: Mapped[UserRole] = mapped_column(
-        Enum(UserRole, name="user_role", create_type=False), nullable=False
-    )
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+    id: Optional[PyObjectId] = Field(default=None, alias="_id")
+    full_name: str
+    email: str
+    password_hash: str
+    role: UserRole
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=utcnow)
 
 
-class PatientProfile(Base):
-    __tablename__ = "patient_profiles"
+class PatientProfile(BaseModel):
+    """Document shape for the `patient_profiles` collection. `user_id` stores the
+    referenced User's _id as a string (Mongo has no enforced foreign keys)."""
 
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
-    )
-    date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
-    sex: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    city: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    emergency_contact: Mapped[str | None] = mapped_column(String(150), nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
-    )
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
-
-class HealthProfile(Base):
-    __tablename__ = "health_profiles"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    patient_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
-    )
-    height_cm: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
-    weight_kg: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
-    smoker: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    diabetes: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    hypertension: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    family_history: Mapped[str | None] = mapped_column(Text, nullable=True)
-    known_conditions: Mapped[str | None] = mapped_column(Text, nullable=True)
-    current_medications: Mapped[str | None] = mapped_column(Text, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
-    )
+    id: Optional[PyObjectId] = Field(default=None, alias="_id")
+    user_id: PyObjectId
+    date_of_birth: Optional[date] = None
+    sex: Optional[str] = None
+    phone: Optional[str] = None
+    city: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    updated_at: datetime = Field(default_factory=utcnow)
 
 
-class MedicalDocument(Base):
-    __tablename__ = "medical_documents"
+class HealthProfile(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    patient_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
-    document_type: Mapped[str] = mapped_column(String(30), nullable=False)
-    original_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    stored_name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
-    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
-    processing_status: Mapped[str] = mapped_column(String(40), nullable=False, default="uploaded")
-    processing_message: Mapped[str | None] = mapped_column(String(300), nullable=True)
-    uploaded_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
+    id: Optional[PyObjectId] = Field(default=None, alias="_id")
+    patient_id: PyObjectId
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    smoker: bool = False
+    diabetes: bool = False
+    hypertension: bool = False
+    family_history: Optional[str] = None
+    known_conditions: Optional[str] = None
+    current_medications: Optional[str] = None
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class MedicalDocument(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+    id: Optional[PyObjectId] = Field(default=None, alias="_id")
+    patient_id: PyObjectId
+    document_type: str
+    original_name: str
+    stored_name: str
+    content_type: Optional[str] = None
+    size_bytes: int
+    storage_path: str
+    processing_status: str = "uploaded"
+    processing_message: Optional[str] = None
+    uploaded_at: datetime = Field(default_factory=utcnow)
+
+
+class ClinicalRecord(BaseModel):
+    """Tabular clinical/lab features used to train the clinical-side prediction model."""
+
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+    id: Optional[PyObjectId] = Field(default=None, alias="_id")
+    patient_id: PyObjectId
+    age: Optional[int] = None
+    resting_bp: Optional[int] = None
+    cholesterol: Optional[int] = None
+    fasting_blood_sugar: Optional[bool] = None
+    max_heart_rate: Optional[int] = None
+    exercise_angina: Optional[bool] = None
+    recorded_at: datetime = Field(default_factory=utcnow)
+
+
+class ECGRecording(BaseModel):
+    """Metadata for an uploaded ECG recording. The raw waveform is stored as a file
+    (via MedicalDocument / storage_path), not as rows/fields in MongoDB."""
+
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+    id: Optional[PyObjectId] = Field(default=None, alias="_id")
+    patient_id: PyObjectId
+    document_id: Optional[PyObjectId] = None
+    sampling_rate_hz: int = 500
+    lead_count: int = 1
+    duration_seconds: Optional[float] = None
+    signal_storage_path: str
+    recorded_at: datetime = Field(default_factory=utcnow)
