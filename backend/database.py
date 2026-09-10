@@ -1,31 +1,31 @@
-import os
+"""
+MongoDB connection and initialization.
 
-from dotenv import load_dotenv
+Uses the centralized `settings` object for connection details.
+"""
+
 from pymongo import MongoClient
 from pymongo.database import Database
 
-load_dotenv()
+from config import settings
 
-MONGODB_URI = os.getenv("MONGODB_URI")
-MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "cardioxai")
+# ── Connection ───────────────────────────────────────────────────
 
-if not MONGODB_URI:
-    raise RuntimeError(
-        "MONGODB_URI is missing. Copy backend/.env.example to backend/.env "
-        "and enter your MongoDB connection string."
-    )
-
-client: MongoClient = MongoClient(MONGODB_URI)
-database: Database = client[MONGODB_DB_NAME]
+client: MongoClient = MongoClient(settings.MONGODB_URI)
+database: Database = client[settings.MONGODB_DB_NAME]
 
 
 def get_db() -> Database:
-    """FastAPI dependency — yields the MongoDB database handle."""
+    """FastAPI dependency — returns the MongoDB database handle."""
     return database
 
 
 def init_indexes() -> None:
-    """Create indexes needed for correctness/performance. Call once on startup."""
+    """Create indexes needed for correctness and performance.
+
+    Called once on application startup. Safe to call multiple times —
+    MongoDB skips indexes that already exist.
+    """
     database["users"].create_index("email", unique=True)
     database["patient_profiles"].create_index("user_id", unique=True)
     database["health_profiles"].create_index("patient_id", unique=True)
@@ -33,3 +33,4 @@ def init_indexes() -> None:
     database["medical_documents"].create_index("stored_name", unique=True)
     database["clinical_records"].create_index("patient_id")
     database["ecg_recordings"].create_index("patient_id")
+    database["ecg_recordings"].create_index("stored_name", unique=True)
