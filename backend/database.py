@@ -1,31 +1,73 @@
-import os
+"""
+MongoDB connection, health checks, and initialization.
 
-from dotenv import load_dotenv
+Sprint 2(A): Enhanced with connection verification and health ping.
+"""
+
 from pymongo import MongoClient
 from pymongo.database import Database
+from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 
-load_dotenv()
+from config import settings
 
-MONGODB_URI = os.getenv("MONGODB_URI")
-MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "cardioxai")
+# ── Connection ───────────────────────────────────────────────────
 
-if not MONGODB_URI:
-    raise RuntimeError(
-        "MONGODB_URI is missing. Copy backend/.env.example to backend/.env "
-        "and enter your MongoDB connection string."
-    )
-
-client: MongoClient = MongoClient(MONGODB_URI)
-database: Database = client[MONGODB_DB_NAME]
+client: MongoClient = MongoClient(
+    settings.MONGODB_URI,
+    serverSelectionTimeoutMS=5000,  # 5s timeout for health checks
+)
+database: Database = client[settings.MONGODB_DB_NAME]
 
 
 def get_db() -> Database:
-    """FastAPI dependency — yields the MongoDB database handle."""
+    """FastAPI dependency — returns the MongoDB database handle."""
     return database
 
 
+def ping_db() -> dict:
+    """Ping the MongoDB server and return connection status.
+
+    Returns a dict with `connected` (bool), `database` name, and
+    `latency_ms` on success or `error` message on failure.
+    """
+    import time
+
+    try:
+        start = time.perf_counter()
+        client.admin.command("ping")
+        latency = round((time.perf_counter() - start) * 1000, 2)
+        return {
+            "connected": True,
+            "database": settings.MONGODB_DB_NAME,
+            "latency_ms": latency,
+        }
+    except (ConnectionFailure, ServerSelectionTimeoutError) as exc:
+        return {
+            "connected": False,
+            "database": settings.MONGODB_DB_NAME,
+            "error": str(exc),
+        }
+
+
+def verify_connection() -> None:
+    """Verify MongoDB is reachable. Called on startup — fails fast if not."""
+    try:
+        client.admin.command("ping")
+    except (ConnectionFailure, ServerSelectionTimeoutError) as exc:
+        raise RuntimeError(
+            f"Cannot connect to MongoDB at startup.\n"
+            f"  URI: {settings.MONGODB_URI[:30]}...\n"
+            f"  Error: {exc}\n"
+            f"  → Check your .env file and network connection."
+        ) from exc
+
+
 def init_indexes() -> None:
-    """Create indexes needed for correctness/performance. Call once on startup."""
+    """Create indexes needed for correctness and performance.
+
+    Called once on application startup. Safe to call multiple times —
+    MongoDB skips indexes that already exist.
+    """
     database["users"].create_index("email", unique=True)
     database["patient_profiles"].create_index("user_id", unique=True)
     database["health_profiles"].create_index("patient_id", unique=True)
@@ -33,3 +75,16 @@ def init_indexes() -> None:
     database["medical_documents"].create_index("stored_name", unique=True)
     database["clinical_records"].create_index("patient_id")
     database["ecg_recordings"].create_index("patient_id")
+    database["ecg_recordings"].create_index("stored_name", unique=True)
+
+
+def get_collection_stats() -> dict:
+    """Return document counts for each collection (useful for dashboards)."""
+    collections = [
+        "users", "patient_profiles", "health_profiles",
+        "medical_documents", "clinical_records", "ecg_recordings",
+    ]
+    stats = {}
+    for name in collections:
+        stats[name] = database[name].count_documents({})
+    return stats

@@ -1,12 +1,23 @@
+"""
+MongoDB document models.
+
+Each class represents the shape of a document in a MongoDB collection.
+Pydantic handles validation; MongoDB stores the raw dicts.
+"""
+
 import enum
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Annotated, Any, Optional
 
 from bson import ObjectId
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 
+# ── ObjectId helper ──────────────────────────────────────────────
+
+
 def _validate_object_id(value: Any) -> str:
+    """Accept a BSON ObjectId or a valid ObjectId string → always return str."""
     if isinstance(value, ObjectId):
         return str(value)
     if isinstance(value, str) and ObjectId.is_valid(value):
@@ -14,12 +25,15 @@ def _validate_object_id(value: Any) -> str:
     raise ValueError("Invalid ObjectId")
 
 
-# Lets Mongo's ObjectId flow in/out of Pydantic models as a plain string.
 PyObjectId = Annotated[str, BeforeValidator(_validate_object_id)]
 
 
 def utcnow() -> datetime:
+    """Timezone-aware UTC timestamp."""
     return datetime.now(timezone.utc)
+
+
+# ── Enums ────────────────────────────────────────────────────────
 
 
 class UserRole(str, enum.Enum):
@@ -27,6 +41,9 @@ class UserRole(str, enum.Enum):
     doctor = "doctor"
     patient = "patient"
     lab_technician = "lab_technician"
+
+
+# ── User ─────────────────────────────────────────────────────────
 
 
 class User(BaseModel):
@@ -43,81 +60,67 @@ class User(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
 
 
-class PatientProfile(BaseModel):
-    """Document shape for the `patient_profiles` collection. `user_id` stores the
-    referenced User's _id as a string (Mongo has no enforced foreign keys)."""
-
-    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
-
-    id: Optional[PyObjectId] = Field(default=None, alias="_id")
-    user_id: PyObjectId
-    date_of_birth: Optional[date] = None
-    sex: Optional[str] = None
-    phone: Optional[str] = None
-    city: Optional[str] = None
-    emergency_contact: Optional[str] = None
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
-class HealthProfile(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
-
-    id: Optional[PyObjectId] = Field(default=None, alias="_id")
-    patient_id: PyObjectId
-    height_cm: Optional[float] = None
-    weight_kg: Optional[float] = None
-    smoker: bool = False
-    diabetes: bool = False
-    hypertension: bool = False
-    family_history: Optional[str] = None
-    known_conditions: Optional[str] = None
-    current_medications: Optional[str] = None
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
-class MedicalDocument(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
-
-    id: Optional[PyObjectId] = Field(default=None, alias="_id")
-    patient_id: PyObjectId
-    document_type: str
-    original_name: str
-    stored_name: str
-    content_type: Optional[str] = None
-    size_bytes: int
-    storage_path: str
-    processing_status: str = "uploaded"
-    processing_message: Optional[str] = None
-    uploaded_at: datetime = Field(default_factory=utcnow)
+# ── Clinical Record ─────────────────────────────────────────────
 
 
 class ClinicalRecord(BaseModel):
-    """Tabular clinical/lab features used to train the clinical-side prediction model."""
+    """Tabular clinical/lab features used for heart disease prediction.
+
+    Stored in the `clinical_records` collection. Each document represents
+    one clinical observation for a patient.
+    """
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
     id: Optional[PyObjectId] = Field(default=None, alias="_id")
     patient_id: PyObjectId
-    age: Optional[int] = None
-    resting_bp: Optional[int] = None
-    cholesterol: Optional[int] = None
-    fasting_blood_sugar: Optional[bool] = None
-    max_heart_rate: Optional[int] = None
+
+    # Demographics & vitals
+    age: Optional[int] = Field(default=None, ge=1, le=150)
+    sex: Optional[str] = Field(default=None, description="M or F")
+    chest_pain_type: Optional[str] = Field(default=None, description="TA, ATA, NAP, ASY")
+    resting_bp: Optional[int] = Field(default=None, ge=0, le=300)
+    cholesterol: Optional[int] = Field(default=None, ge=0, le=1000)
+    fasting_blood_sugar: Optional[bool] = Field(default=None, description="True if > 120 mg/dl")
+    resting_ecg: Optional[str] = Field(default=None, description="Normal, ST, LVH")
+    max_heart_rate: Optional[int] = Field(default=None, ge=0, le=300)
     exercise_angina: Optional[bool] = None
+    st_depression: Optional[float] = Field(default=None, ge=-10, le=10)
+    st_slope: Optional[str] = Field(default=None, description="Up, Flat, Down")
+
     recorded_at: datetime = Field(default_factory=utcnow)
+
+
+# ── ECG Recording ───────────────────────────────────────────────
 
 
 class ECGRecording(BaseModel):
-    """Metadata for an uploaded ECG recording. The raw waveform is stored as a file
-    (via MedicalDocument / storage_path), not as rows/fields in MongoDB."""
+    """Metadata for an uploaded ECG signal file.
+
+    The raw waveform is stored on disk; this document tracks file
+    location and signal properties. Stored in the `ecg_recordings` collection.
+    """
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
     id: Optional[PyObjectId] = Field(default=None, alias="_id")
     patient_id: PyObjectId
-    document_id: Optional[PyObjectId] = None
+
+    # File info
+    original_name: str
+    stored_name: str
+    storage_path: str
+    content_type: Optional[str] = None
+    size_bytes: int
+
+    # Signal properties
     sampling_rate_hz: int = 500
     lead_count: int = 1
     duration_seconds: Optional[float] = None
-    signal_storage_path: str
-    recorded_at: datetime = Field(default_factory=utcnow)
+
+    # Processing
+    processing_status: str = "uploaded"
+    processing_message: Optional[str] = None
+
+    uploaded_at: datetime = Field(default_factory=utcnow)
+
